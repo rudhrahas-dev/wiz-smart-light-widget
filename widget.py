@@ -61,6 +61,18 @@ TEXT_WHITE = "#f5f6fa"
 TEXT_MUTED = "#8e9297"
 TEXT_DIM = "#57606f"
 
+# Preset definitions for scheduled automations
+SCHEDULE_PRESETS: Dict[str, Dict[str, Any]] = {
+    "💡 Turn Light ON": {"action": "turn_on"},
+    "⏻ Turn Light OFF": {"action": "turn_off"},
+    "☀️ Daylight (6500K, 100%)": {"action": "preset", "temp": 6500, "dim": 100},
+    "❄️ Cool Blue (6500K, 100%)": {"action": "preset", "temp": 6500, "dim": 100},
+    "📖 Study / Focus (5000K, 100%)": {"action": "preset", "temp": 5000, "dim": 100},
+    "☕ Warm White (3500K, 80%)": {"action": "preset", "temp": 3500, "dim": 80},
+    "🕯️ Candlelight (3000K, 30%)": {"action": "preset", "temp": 3000, "dim": 30},
+    "🌙 Night Light (3000K, 10%)": {"action": "preset", "temp": 3000, "dim": 10},
+}
+
 
 def load_config() -> Dict[str, Any]:
     default_config = {
@@ -70,7 +82,8 @@ def load_config() -> Dict[str, Any]:
         "orientation": "vertical",     # "vertical" or "horizontal"
         "win_x": -1,
         "win_y": -1,
-        "poll_interval": 3.0
+        "poll_interval": 3.0,
+        "schedules": []
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -245,6 +258,199 @@ class SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
+class ScheduleDialog(tk.Toplevel):
+    """Frameless dark modal dialog for configuring automated schedules and timers."""
+    def __init__(self, parent: "WizFloatingWidget", config: Dict[str, Any], on_schedules_updated: Callable[[list], None]):
+        super().__init__(parent)
+        self.parent_widget = parent
+        self.config = config
+        self.on_schedules_updated = on_schedules_updated
+        self.overrideredirect(True)
+        self.wm_attributes("-topmost", True)
+        self.configure(bg=BORDER_COLOR)
+
+        self.box = tk.Frame(self, bg=BG_DARK, highlightthickness=1, highlightbackground=BORDER_COLOR, padx=14, pady=12)
+        self.box.pack(fill=tk.BOTH, expand=True)
+
+        # Header
+        hdr = tk.Frame(self.box, bg=BG_DARK)
+        hdr.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(hdr, text="⏰ Schedules & Automation", font=(FONT_MAIN, 10, "bold"), fg=ACCENT_GOLD, bg=BG_DARK).pack(side=tk.LEFT)
+        btn_x = tk.Label(hdr, text="✕", font=(FONT_MAIN, 10), fg=TEXT_MUTED, bg=BG_DARK, cursor="hand2")
+        btn_x.pack(side=tk.RIGHT)
+        btn_x.bind("<Button-1>", lambda e: self.destroy())
+        btn_x.bind("<Enter>", lambda e: btn_x.config(fg=ACCENT_RED))
+        btn_x.bind("<Leave>", lambda e: btn_x.config(fg=TEXT_MUTED))
+
+        # Active Rules Container
+        lbl_list = tk.Label(self.box, text="Active Timed Schedules:", font=(FONT_MAIN, 8, "bold"), fg=TEXT_MUTED, bg=BG_DARK)
+        lbl_list.pack(anchor="w", pady=(2, 4))
+
+        list_container = tk.Frame(self.box, bg=BG_CARD, highlightthickness=1, highlightbackground=BORDER_COLOR)
+        list_container.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+
+        self.canvas = tk.Canvas(list_container, bg=BG_CARD, highlightthickness=0, height=140)
+        scrollbar = tk.Scrollbar(list_container, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg=BG_CARD)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
+
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._render_schedules()
+
+        # Add Rule Form
+        add_box = tk.LabelFrame(self.box, text="Add New Timing Rule", font=(FONT_MAIN, 8, "bold"),
+                                fg=ACCENT_CYAN, bg=BG_DARK, bd=1, relief=tk.SOLID, padx=8, pady=8)
+        add_box.pack(fill=tk.X, pady=(0, 6))
+
+        # Row 1: Time & Repeat
+        r1 = tk.Frame(add_box, bg=BG_DARK)
+        r1.pack(fill=tk.X, pady=2)
+        tk.Label(r1, text="Time:", font=(FONT_MAIN, 8), fg=TEXT_WHITE, bg=BG_DARK).pack(side=tk.LEFT, padx=(0, 4))
+        
+        self.hr_var = tk.StringVar(value="08")
+        hr_menu = tk.OptionMenu(r1, self.hr_var, *[f"{h:02d}" for h in range(24)])
+        hr_menu.config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8), bd=1, relief=tk.FLAT, highlightthickness=0, width=3)
+        hr_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8))
+        hr_menu.pack(side=tk.LEFT, padx=(0, 2))
+
+        tk.Label(r1, text=":", font=(FONT_MAIN, 9, "bold"), fg=TEXT_WHITE, bg=BG_DARK).pack(side=tk.LEFT, padx=1)
+
+        self.min_var = tk.StringVar(value="00")
+        min_menu = tk.OptionMenu(r1, self.min_var, *[f"{m:02d}" for m in range(0, 60, 5)])
+        min_menu.config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8), bd=1, relief=tk.FLAT, highlightthickness=0, width=3)
+        min_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8))
+        min_menu.pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Label(r1, text="Repeat:", font=(FONT_MAIN, 8), fg=TEXT_WHITE, bg=BG_DARK).pack(side=tk.LEFT, padx=(0, 4))
+        self.repeat_var = tk.StringVar(value="Everyday")
+        rep_menu = tk.OptionMenu(r1, self.repeat_var, "Everyday", "Weekdays (Mon-Fri)", "Weekends (Sat-Sun)")
+        rep_menu.config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8), bd=1, relief=tk.FLAT, highlightthickness=0)
+        rep_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8))
+        rep_menu.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Row 2: Action
+        r2 = tk.Frame(add_box, bg=BG_DARK)
+        r2.pack(fill=tk.X, pady=(6, 4))
+        tk.Label(r2, text="Action:", font=(FONT_MAIN, 8), fg=TEXT_WHITE, bg=BG_DARK).pack(side=tk.LEFT, padx=(0, 4))
+
+        self.action_keys = list(SCHEDULE_PRESETS.keys())
+        self.action_var = tk.StringVar(value=self.action_keys[0])
+        act_menu = tk.OptionMenu(r2, self.action_var, *self.action_keys)
+        act_menu.config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8), bd=1, relief=tk.FLAT, highlightthickness=0)
+        act_menu["menu"].config(bg=BG_CARD, fg=TEXT_WHITE, font=(FONT_MAIN, 8))
+        act_menu.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Add Button
+        btn_add = tk.Label(add_box, text="+ Add This Schedule", font=(FONT_MAIN, 8, "bold"),
+                           bg=ACCENT_CYAN, fg=BG_DARK, padx=10, pady=5, cursor="hand2")
+        btn_add.pack(fill=tk.X, pady=(6, 2))
+        btn_add.bind("<Button-1>", lambda e: self._add_schedule())
+        btn_add.bind("<Enter>", lambda e: btn_add.config(bg="#38bdf8"))
+        btn_add.bind("<Leave>", lambda e: btn_add.config(bg=ACCENT_CYAN))
+
+        # Bottom row: Close
+        btn_close = tk.Label(self.box, text="Done / Close", font=(FONT_MAIN, 8),
+                             bg=BG_CARD, fg=TEXT_MUTED, padx=10, pady=4, cursor="hand2")
+        btn_close.pack(anchor="e")
+        btn_close.bind("<Button-1>", lambda e: self.destroy())
+
+        self.update_idletasks()
+        pw_x = parent.winfo_rootx()
+        pw_y = parent.winfo_rooty()
+        self.geometry(f"360x420+{max(10, pw_x - 370)}+{max(10, pw_y)}")
+
+    def _render_schedules(self):
+        for w in self.scrollable_frame.winfo_children():
+            w.destroy()
+
+        schedules = self.config.get("schedules", [])
+        if not schedules:
+            empty_lbl = tk.Label(self.scrollable_frame, text="No timed rules yet.\nAdd a timing rule below to automate your light!",
+                                 font=(FONT_MAIN, 8), fg=TEXT_MUTED, bg=BG_CARD, pady=24)
+            empty_lbl.pack(fill=tk.BOTH, expand=True)
+            return
+
+        for idx, sch in enumerate(schedules):
+            row = tk.Frame(self.scrollable_frame, bg=BG_CARD, pady=4, padx=6)
+            row.pack(fill=tk.X, expand=True, pady=1)
+
+            enabled = sch.get("enabled", True)
+            btn_toggle = tk.Label(row, text="● ON" if enabled else "○ OFF",
+                                  font=(FONT_MAIN, 8, "bold"),
+                                  fg=ACCENT_GREEN if enabled else TEXT_DIM,
+                                  bg=BG_CARD, cursor="hand2", width=6, anchor="w")
+            btn_toggle.pack(side=tk.LEFT, padx=(0, 6))
+            btn_toggle.bind("<Button-1>", lambda e, i=idx: self._toggle_schedule(i))
+            ToolTip(btn_toggle, "Click to Enable / Disable this rule")
+
+            # Time badge
+            lbl_time = tk.Label(row, text=sch.get("time", "00:00"), font=(FONT_MAIN, 9, "bold"),
+                                fg=ACCENT_GOLD if enabled else TEXT_DIM, bg=BG_CARD)
+            lbl_time.pack(side=tk.LEFT, padx=(0, 6))
+
+            # Action & Repeat
+            info_text = f"{sch.get('name', 'Action')} • {sch.get('repeat', 'Everyday')}"
+            lbl_info = tk.Label(row, text=info_text, font=(FONT_MAIN, 8),
+                                fg=TEXT_WHITE if enabled else TEXT_DIM, bg=BG_CARD, anchor="w")
+            lbl_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            btn_del = tk.Label(row, text="✕", font=(FONT_MAIN, 9, "bold"),
+                               fg=TEXT_MUTED, bg=BG_CARD, cursor="hand2", padx=6)
+            btn_del.pack(side=tk.RIGHT)
+            btn_del.bind("<Button-1>", lambda e, i=idx: self._delete_schedule(i))
+            btn_del.bind("<Enter>", lambda e, b=btn_del: b.config(fg=ACCENT_RED))
+            btn_del.bind("<Leave>", lambda e, b=btn_del: b.config(fg=TEXT_MUTED))
+            ToolTip(btn_del, "Delete this schedule")
+
+    def _add_schedule(self):
+        t_str = f"{self.hr_var.get()}:{self.min_var.get()}"
+        act_name = self.action_var.get()
+        act_info = SCHEDULE_PRESETS.get(act_name, {"action": "turn_on"})
+        repeat = self.repeat_var.get()
+
+        new_entry = {
+            "id": f"sch_{int(time.time() * 1000)}",
+            "enabled": True,
+            "time": t_str,
+            "name": act_name,
+            "repeat": repeat,
+            **act_info
+        }
+
+        schedules = self.config.get("schedules", [])
+        schedules.append(new_entry)
+        schedules.sort(key=lambda s: s.get("time", "00:00"))
+        self.config["schedules"] = schedules
+        self.on_schedules_updated(schedules)
+        self._render_schedules()
+
+    def _toggle_schedule(self, idx: int):
+        schedules = self.config.get("schedules", [])
+        if 0 <= idx < len(schedules):
+            schedules[idx]["enabled"] = not schedules[idx].get("enabled", True)
+            self.config["schedules"] = schedules
+            self.on_schedules_updated(schedules)
+            self._render_schedules()
+
+    def _delete_schedule(self, idx: int):
+        schedules = self.config.get("schedules", [])
+        if 0 <= idx < len(schedules):
+            schedules.pop(idx)
+            self.config["schedules"] = schedules
+            self.on_schedules_updated(schedules)
+            self._render_schedules()
+
+
 class WizFloatingWidget(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -265,6 +471,7 @@ class WizFloatingWidget(tk.Tk):
         self.polling_active = True
         self.is_minimized = False
         self.settings_dialog: Optional[SettingsDialog] = None
+        self.schedule_dialog: Optional[ScheduleDialog] = None
 
         # Drag tracking
         self._drag_start_x = 0
@@ -278,6 +485,7 @@ class WizFloatingWidget(tk.Tk):
         self._apply_geometry()
         self._setup_tray()
         self._start_background_polling()
+        self._start_scheduler()
 
         # Immediate bulb state query
         self.after(50, self.refresh_state_async)
@@ -344,6 +552,7 @@ class WizFloatingWidget(tk.Tk):
                     item("10%", lambda i, it: self.after(0, lambda: self.set_dimming(10))),
                 )
             ),
+            item("⏰ Schedules & Timers...", lambda i, it: self.after(0, self.open_schedules)),
             Menu.SEPARATOR,
             item(
                 lambda text: "🖥️ Show Remote Wand" if self.is_minimized else "📥 Hide Remote to Tray",
@@ -360,9 +569,9 @@ class WizFloatingWidget(tk.Tk):
 
         if self.orientation == "vertical":
             w = 42
-            h = 398
+            h = 428
         else:
-            w = 428
+            w = 462
             h = 36
 
         if target_x is not None and target_y is not None:
@@ -516,8 +725,13 @@ class WizFloatingWidget(tk.Tk):
         btn_rot.pack(side=side_pack, padx=2, pady=1)
         ToolTip(btn_rot, f"Switch to {'Horizontal' if is_v else 'Vertical'} Strip Remote")
 
+        # Schedules & Automation
+        btn_sch = make_icon_btn(self.container, "⏰", self.open_schedules, font=(FONT_EMOJI, 9), fg=ACCENT_GOLD)
+        btn_sch.pack(side=side_pack, padx=2, pady=1)
+        ToolTip(btn_sch, "Schedules & Automation (Auto Turn ON/OFF & Presets)")
+
         # Settings
-        btn_set = make_icon_btn(self.container, "⚙️", self.open_settings, font=("Segoe UI Emoji", 9), fg=TEXT_MUTED)
+        btn_set = make_icon_btn(self.container, "⚙️", self.open_settings, font=(FONT_EMOJI, 9), fg=TEXT_MUTED)
         btn_set.pack(side=side_pack, padx=2, pady=1)
         ToolTip(btn_set, "Bulb Settings (IP & Security Key)")
 
@@ -638,16 +852,18 @@ class WizFloatingWidget(tk.Tk):
             self.after(0, lambda d=state_data: self._update_ui_state(d))
         threading.Thread(target=worker, daemon=True).start()
 
-    def toggle_power(self):
-        current_state = bool(self.bulb_state.get("state", False))
-        new_state = not current_state
-        self.bulb_state["state"] = new_state
+    def set_power(self, state: bool):
+        self.bulb_state["state"] = state
         if hasattr(self, "btn_power") and self.btn_power.winfo_exists():
-            if new_state:
+            if state:
                 self.btn_power.config(text="💡", bg=ACCENT_GOLD, fg="#121316")
             else:
                 self.btn_power.config(text="⏻", bg=BG_CARD, fg=TEXT_MUTED)
-        self._send_command_async(state=new_state)
+        self._send_command_async(state=state)
+
+    def toggle_power(self):
+        current_state = bool(self.bulb_state.get("state", False))
+        self.set_power(not current_state)
 
     def set_dimming(self, dim: int):
         d = max(10, min(100, int(dim)))
@@ -720,6 +936,69 @@ class WizFloatingWidget(tk.Tk):
         save_config(self.config)
         self.controller = WizBulbController(ip=new_ip, signing_key=new_key)
         self.refresh_state_async()
+
+    def open_schedules(self):
+        if self.schedule_dialog and self.schedule_dialog.winfo_exists():
+            self.schedule_dialog.lift()
+            return
+        self.schedule_dialog = ScheduleDialog(self, self.config, self._on_schedules_updated)
+
+    def _on_schedules_updated(self, new_schedules: list):
+        self.config["schedules"] = new_schedules
+        save_config(self.config)
+
+    def _start_scheduler(self):
+        self._executed_triggers = set()
+
+        def check_schedules():
+            if not getattr(self, "polling_active", True):
+                return
+            now = time.localtime()
+            current_hm = f"{now.tm_hour:02d}:{now.tm_min:02d}"
+            current_day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][now.tm_wday]
+            is_weekend = now.tm_wday in [5, 6]
+            is_weekday = now.tm_wday in [0, 1, 2, 3, 4]
+            date_prefix = f"{now.tm_year}-{now.tm_yday}"
+
+            schedules = self.config.get("schedules", [])
+            for sch in schedules:
+                if not sch.get("enabled", True):
+                    continue
+                if sch.get("time") != current_hm:
+                    continue
+
+                repeat = sch.get("repeat", "Everyday")
+                if repeat == "Weekdays (Mon-Fri)" and not is_weekday:
+                    continue
+                if repeat == "Weekends (Sat-Sun)" and not is_weekend:
+                    continue
+                if isinstance(repeat, list) and current_day not in repeat:
+                    continue
+
+                trigger_id = sch.get("id", f"{sch.get('time')}_{sch.get('action')}")
+                trigger_key = f"{date_prefix}:{trigger_id}"
+                if trigger_key in self._executed_triggers:
+                    continue
+
+                # Execute action
+                self._executed_triggers.add(trigger_key)
+                action = sch.get("action", "")
+                if action == "turn_on":
+                    self.set_power(True)
+                elif action == "turn_off":
+                    self.set_power(False)
+                elif action == "preset":
+                    temp = sch.get("temp", 6500)
+                    dim = sch.get("dim", 100)
+                    self.apply_preset(temp, dim)
+
+            # Prune old trigger records
+            if len(self._executed_triggers) > 200:
+                self._executed_triggers = {k for k in self._executed_triggers if k.startswith(date_prefix)}
+
+            self.after(5000, check_schedules)
+
+        self.after(5000, check_schedules)
 
     def quit_app(self):
         self.polling_active = False
