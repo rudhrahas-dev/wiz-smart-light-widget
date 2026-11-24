@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=WiZ Smart Light
+Comment=Floating widget to control WiZ Smart Bulb and monitor power status
+Exec=/usr/bin/python3 /home/pradeep/smart_bulb_widget/widget.py
+Icon=preferences-system-power
+Terminal=false
+Categories=Utility;HardwareSettings;
+StartupNotify=true
