@@ -6,8 +6,9 @@ A sleek, borderless, floating desktop remote control and system tray widget for 
 
 ---
 
-## 📥 Direct Download
-* **[Download Latest ZIP (All-in-One)](https://github.com/rudhrahas-dev/wiz-smart-light-widget/archive/refs/heads/main.zip)**
+## 📥 Direct Download Links
+* 📦 **[Download Windows 10/11 Ready-to-Run ZIP (v1.0.0)](https://github.com/rudhrahas-dev/wiz-smart-light-widget/releases/download/v1.0.0/WiZ_Widget_Windows10.zip)** *(Recommended for Windows)*
+* 📂 **[Download Complete Source Code ZIP (main branch)](https://github.com/rudhrahas-dev/wiz-smart-light-widget/archive/refs/heads/main.zip)**
 
 ---
 
